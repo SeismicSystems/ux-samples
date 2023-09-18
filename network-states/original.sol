@@ -8,35 +8,39 @@
 pragma solidity ^0.8.0;
 
 contract NetworkStates {
-    // Stores relevant values for one cell on the grid
+    /*
+     * Stores relevant values for one cell on the grid.
+     */
     struct Tile {
         address owner;
         uint256 resources;
     }
 
-    // Game state represented as a 20x20 grid of tiles
+    /*
+     * Game state represented as a 20x20 grid of tiles.
+     */
     uint256 constant GRID_SIZE = 20;
     Tile[GRID_SIZE][GRID_SIZE] public grid;
 
-    // Check if the tile is unowned
-    modifier isUnowned(uint256 x, uint256 y) {
-        require(grid[x][y].owner == address(0), "Tile already owned");
-        _;
+    /*
+     * Spawn player onto the grid with 10 troops.
+     */
+    function spawn(uint256 x, uint256 y) external {
+        grid[x][y].owner = msg.sender;
+        grid[x][y].resources = 10;
     }
 
-    // Check if the tile is owned by the sender
+    /*
+     * Check if the tile is owned by sender.
+     */
     modifier isOwnedBySender(uint256 x, uint256 y) {
         require(grid[x][y].owner == msg.sender, "Tile not owned by sender");
         _;
     }
 
-    // Spawn player on the grid with 10 troops to mess around with
-    function spawn(uint256 x, uint256 y) external isUnowned(x, y) {
-        grid[x][y].owner = msg.sender;
-        grid[x][y].resources = 10;
-    }
-
-    // Move troops from at a Tile to a neighboring Tile
+    /*
+     * Move troops at a Tile to a neighboring Tile.
+     */
     function move(
         uint256 fromX,
         uint256 fromY,
@@ -44,13 +48,11 @@ contract NetworkStates {
         uint256 toY,
         uint256 amount
     ) external isOwnedBySender(fromX, fromY) {
-        // Cannot spin up resources from thin air 
         require(
             amount <= grid[fromX][fromY].resources,
             "Not enough resources"
         );
 
-        // Must move one square in the cardinal plane
         require(
             (fromX == toX && (fromY == toY + 1 || fromY == toY - 1)) ||
                 (fromY == toY && (fromX == toX + 1 || fromX == toX - 1)),
