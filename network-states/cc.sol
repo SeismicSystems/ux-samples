@@ -4,48 +4,82 @@
 pragma solidity ^0.8.0;
 
 contract NetworkStates {
+
     /*
-     * Stores relevant values for one cell on the grid. Information stored here
-     * is shielded from unauthorized parties.
+     * - owner is a reserved attribute of any sstruct
+     * - sstructs must be stored in unordered set, so location must be an 
+     *   attribute
+     * - sstructs can only have members variables of type suint
      */
-    shield struct Tile {
-        saddress owner;
+    sstruct Tile {
         suint resources;
+        suint x;
+        suint y;
     }
 
     /*
-     * Game state represented as a 20x20 grid of shielded tiles. Defaults to 
-     * capacity of 2^32 lifetime modifications to grid. 
+     * - any variable that interacts with suint must also be suint
+     * - sstructs in unordered set
      */
     suint constant GRID_SIZE = 20;
-    Tile[GRID_SIZE][GRID_SIZE] shield grid;
+    Tile{} tiles;
 
     /*
-     * Spawn player onto the grid with 10 troops.
+     * - must restrict to board size now since not automatically done with 
+     *   array indexing
      */
-    function spawn(suint x, suint y) external {
-        grid[x][y].owner = shield(msg.sender);
-        grid[x][y].resources = 10;
+    function spawn(suint x_, suint y_) external {
+        require(
+            x_ < GRID_SIZE && y_ < GRID_SIZE, 
+            "Location out of bounds"
+        );
+
+        tiles.insert(Tile({
+            resources: 10,
+            x: x_,
+            y: y_,
+        }))
     }
 
     /*
-     * Check if tile is owned by sender.
+     * - any function that uses find() is a shielded function
+     * - shielded functions are sent to Elliptic
+     * - any function called by a shielded function is also sent to Elliptic
      */
-    modifier isOwnedBySender(suint x, suint y) {
-        require(grid[x][y].owner == shield(msg.sender), 
-            "Tile not owned by sender");
+    function query(suint xQ, suint yQ, suint xA, suint yA) view 
+        returns(Tile memory) {
+
+        // linear scan rn, can improve 
+        Tile memory tQ = tiles.find((t) => t.x == xQ  && t.y == yQ);
+        Tile memory tA = tiles.find((t) => t.x == xA  && t.y == yA);
+
+        require(
+            tA.owner == msg.sender, 
+            "Sender doesn't own claimed tile"
+        );
+
+        require(
+            isNeighbor(tQ, tA),
+            "Claimed tile is not adjacent to query target"
+        )
+
+        return tQ;
+    }
+
+    /*
+     * - nothing changes
+     */
+    modifier isOwnedBySender(uint256 x, uint256 y) {
+        require(grid[x][y].owner == msg.sender, "Tile not owned by sender");
         _;
     }
 
-    /*
-     * Move troops at a tile to a neighboring tile.
-     */
     function move(
-        suint fromX,
-        suint fromY,
-        suint toX,
-        suint toY,
-        suint amount
+        uint256 fromX,
+        uint256 fromY,
+        uint256 toX,
+        uint256 toY,
+        uint256 amount
     ) external isOwnedBySender(fromX, fromY) {
         require(
             amount <= grid[fromX][fromY].resources,
@@ -58,17 +92,17 @@ contract NetworkStates {
             "Not an adjacent tile"
         );
 
-        if (grid[toX][toY].owner == shield(address(0))) {
+        if (grid[toX][toY].owner == address(0)) {
             // Moving onto an unowned tile
-            grid[toX][toY].owner = shield(msg.sender);
+            grid[toX][toY].owner = msg.sender;
             grid[toX][toY].resources = amount;
             grid[fromX][fromY].resources -= amount;
         }
-        else if (grid[toX][toY].owner != shield(msg.sender)) {
+        else if (grid[toX][toY].owner != msg.sender) {
             // Moving onto an enemy tile
             if (amount > grid[toX][toY].resources) {
                 // Conquered successfully
-                grid[toX][toY].owner = shield(msg.sender);
+                grid[toX][toY].owner = msg.sender;
                 grid[toX][toY].resources = amount - grid[toX][toY].resources;
             } else {
                 // Not enough to conquer 
@@ -81,38 +115,5 @@ contract NetworkStates {
             grid[toX][toY].resources += amount;
             grid[fromX][fromY].resources -= amount;
         }
-    }
-
-    /*
-     * Players now need to query for the state of a tile at (xQ, yQ). Permission
-     * to view is gated by owning an adjacent tile (xA, yA).
-     */
-    function query(suint xQ, suint yQ, suint xA, suint yA) view 
-        returns(Tile memory) {
-
-        require(
-            grid[xA][yA].owner == shield(msg.sender), 
-            "Sender doesn't own claimed tile"
-        );
-
-        require(
-            isNeighbor(xQ, yQ, xA, yA), 
-            "Claimed tile is not adjacent to query target"
-        );
-
-        return grid[xQ][yQ];
-    }
-
-    /*
-     * Whether (x2, y2) is a neighbor of (x1, y1). Concretely, this means that
-     * (x2, y2) is in the 3x3 grid centered at (x1, y1). 
-     */
-    function isNeighbor(uint8 x1, uint8 y1, uint8 x2, uint8 y2) pure 
-        returns(bool) {
-            
-        uint8 dx = x1 > x2 ? x1 - x2 : x2 - x1;
-        uint8 dy = y1 > y2 ? y1 - y2 : y2 - y1;
-
-        return dx <= 1 && dy <= 1;
     }
 }
