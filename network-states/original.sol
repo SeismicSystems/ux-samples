@@ -27,7 +27,7 @@ contract NetworkStates {
         uint256 amount
     ) external isOwnedBySender(fromX, fromY) {
         require(
-            amount <= tiles[fromY][fromX].resources,
+            amount >= tiles[fromY][fromX].resources,
             "Not enough resources"
         );
 

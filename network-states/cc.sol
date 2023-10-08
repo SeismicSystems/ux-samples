@@ -9,7 +9,9 @@ contract NetworkStates {
      * - owner is a reserved attribute of any sstruct
      * - sstructs must be stored in unordered set, so location must be an 
      *   attribute
-     * - sstructs can only have members variables of type suint
+     * - sstructs can have members variables of type suint, shielded ints
+     * - this sstruct only has suint members, but that doesn't always need
+     *   to be the case
      */
     sstruct Tile {
         suint resources;
@@ -20,6 +22,7 @@ contract NetworkStates {
     /*
      * - any variable that interacts with suint must also be suint
      * - sstructs in unordered set
+     * - [TODO] need to initialize all 20x20 tiles
      */
     suint constant GRID_SIZE = 20;
     Tile{} tiles;
@@ -34,7 +37,8 @@ contract NetworkStates {
             "Location out of bounds"
         );
 
-        tiles.insert(Tile({
+        // insert owner & tile pair to set
+        tiles.insert(msg.sender: Tile({
             resources: 10,
             x: x_,
             y: y_,
@@ -46,11 +50,10 @@ contract NetworkStates {
      * - shielded functions are sent to Elliptic
      * - any function called by a shielded function is also sent to Elliptic
      */
-    function query(suint xQ, suint yQ, suint xA, suint yA) view 
+    function query(Tile Q, suint xA, suint yA) view 
         returns(Tile memory) {
 
         // linear scan rn, can improve 
-        Tile memory tQ = tiles.find((t) => t.x == xQ  && t.y == yQ);
         Tile memory tA = tiles.find((t) => t.x == xA  && t.y == yA);
 
         require(
@@ -67,38 +70,39 @@ contract NetworkStates {
     }
 
     /*
-     * - nothing changes
+     * - open ownership model, owner of each instantiation of sstruct is known
      */
-    modifier isOwnedBySender(uint256 x, uint256 y) {
-        require(grid[x][y].owner == msg.sender, "Tile not owned by sender");
+    modifier isOwnedBySender(Tile t) {
+        require(t.owner == msg.sender, "Tile not owned by sender");
         _;
     }
 
+    /*
+     * - isNeighbor() is called by both shielded & regular funcs, so it's
+     *   deployed to both chain & Elliptic
+     */
     function move(
-        uint256 fromX,
-        uint256 fromY,
-        uint256 toX,
-        uint256 toY,
-        uint256 amount
+        Tile from,
+        Tile to,
+        suint amount
     ) external isOwnedBySender(fromX, fromY) {
         require(
-            amount <= grid[fromX][fromY].resources,
+            amount >= from.resources,
             "Not enough resources"
         );
 
         require(
-            (fromX == toX && (fromY == toY + 1 || fromY == toY - 1)) ||
-                (fromY == toY && (fromX == toX + 1 || fromX == toX - 1)),
+            isNeighbor(from, to),
             "Not an adjacent tile"
         );
 
-        if (grid[toX][toY].owner == address(0)) {
+        if (to.owner == address(0)) {
             // Moving onto an unowned tile
-            grid[toX][toY].owner = msg.sender;
-            grid[toX][toY].resources = amount;
-            grid[fromX][fromY].resources -= amount;
+            to.owner = msg.sender;
+            to.resources = amount;
+            from.resources -= amount;
         }
-        else if (grid[toX][toY].owner != msg.sender) {
+        else if (to.owner != msg.sender) {
             // Moving onto an enemy tile
             if (amount > grid[toX][toY].resources) {
                 // Conquered successfully
