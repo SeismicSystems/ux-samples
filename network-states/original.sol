@@ -1,59 +1,93 @@
+/*
+ * [SPDX-License-Identifier: MIT]
+ * 
+ * A demo for Network States without fog of war. 
+ */
 pragma solidity ^0.8.0;
 
 contract NetworkStates {
     struct Tile {
         address owner;
-        uint256 resources;
+        uint256 numTroops;
     }
 
-    uint256 constant GRID_SIZE = 20;
-    Tile[GRID_SIZE][GRID_SIZE] public tiles;
+    mapping(uint256 => mapping(uint256 => Tile)) public tiles;
 
-    function spawn(uint256 x, uint256 y) external {
-        tiles[y][x].owner = msg.sender;
-        tiles[y][x].resources = 10;
+    // users can pick where they spawn
+    function spawn(Tile memory landing) public {
+        require(
+            landing.owner == address(0),
+            "Cannot spawn onto an owned tile"
+        );
+        landing.numTroops = 10;
+        landing.owner = msg.sender;
     }
 
-    modifier isOwnedBySender(uint256 x, uint256 y) {
-        require(tiles[y][x].owner == msg.sender, "Tile not owned by sender");
+    modifier isOwnedBySender(Tile memory t) {
+        require(
+            t.owner == msg.sender,
+            "Tile must be owned by sender of the tx"
+        );
+        _;
+    }
+
+    modifier isNeighbor(
+        uint256 r1,
+        uint256 c1,
+        uint256 r2,
+        uint256 c2
+    ) {
+        require(
+            (r1 == r2 && (c1 == c2 + 1 || c1 == c2 - 1)) ||
+                (c1 == c2 && (r1 == r2 + 1 || r1 == r2 - 1)),
+            "Given points are not neighbors"
+        );
+        _;
+    }
+
+    modifier sufficientResources(
+        Tile memory t,
+        uint256 amount
+    ) {
+        require(
+            amount >= t.numTroops,
+            "Insufficient number of troops at the tile"
+        );
         _;
     }
 
     function move(
-        uint256 fromX,
-        uint256 fromY,
-        uint256 toX,
-        uint256 toY,
+        uint256 fromR,
+        uint256 fromC,
+        uint256 toR,
+        uint256 toC,
         uint256 amount
-    ) external isOwnedBySender(fromX, fromY) {
-        require(
-            amount >= tiles[fromY][fromX].resources,
-            "Not enough resources"
-        );
-
-        require(
-            (fromX == toX && (fromY == toY + 1 || fromY == toY - 1)) ||
-                (fromY == toY && (fromX == toX + 1 || fromX == toX - 1)),
-            "Not an adjacent tile"
-        );
-
-        if (tiles[toY][toX].owner == address(0)) {
-            tiles[toY][toX].owner = msg.sender;
-            tiles[toY][toX].resources = amount;
-            tiles[fromY][fromX].resources -= amount;
-        }
-        else if (tiles[toY][toX].owner != msg.sender) {
-            if (amount > tiles[toY][toX].resources) {
-                tiles[toY][toX].owner = msg.sender;
-                tiles[toY][toX].resources = amount - tiles[toY][toX].resources;
+    )
+        external
+        isNeighbor(fromR, fromC, toR, toC)
+        isOwnedBySender(tiles[fromR][fromC])
+        sufficientResources(tiles[fromR][fromC], amount)
+    {
+        Tile storage from = tiles[fromR][fromC];
+        Tile storage to = tiles[toR][toC];
+        if (to.owner == address(0)) {
+            // moving onto unowned tile
+            to.owner = msg.sender;
+            to.numTroops = amount;
+        } else if (to.owner != msg.sender) {
+            // moving onto enemy tile
+            if (amount > to.numTroops) {
+                // conquer tile
+                to.owner = msg.sender;
+                to.numTroops = amount - to.numTroops;
             } else {
-                tiles[toY][toX].resources -= amount;
+                // did not conquer tile
+                to.numTroops -= amount;
             }
-            tiles[fromY][fromX].resources -= amount;
+        } else {
+            // moving onto own tile
+            to.numTroops += amount;
         }
-        else {
-            tiles[toY][toX].resources += amount;
-            tiles[fromY][fromX].resources -= amount;
-        }
+        from.numTroops -= amount;
     }
 }
