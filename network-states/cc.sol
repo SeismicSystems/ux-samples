@@ -7,117 +7,123 @@ contract NetworkStates {
 
     /*
      * - owner is a reserved attribute of any sstruct
-     * - sstructs must be stored in unordered set, so location must be an 
-     *   attribute
      * - sstructs can have members variables of type suint, shielded ints
      * - this sstruct only has suint members, but that doesn't always need
-     *   to be the case
+     *   to be the case, can have uint256 too
+     * - any variable that interacts with suint must also be suint
      */
     sstruct Tile {
         suint resources;
-        suint x;
-        suint y;
+        suint r;
+        suint c;
     }
 
     /*
-     * - any variable that interacts with suint must also be suint
-     * - sstructs in unordered set
-     * - [TODO] need to initialize all 20x20 tiles
+     * sstructs are stored in unordered set (actually a map beind the scenes), 
+     * so location must be an attribute (can't index)
      */
-    suint constant GRID_SIZE = 20;
     Tile{} tiles;
 
     /*
-     * - must restrict to board size now since not automatically done with 
-     *   array indexing
+     * - landing is consumed
      */
-    function spawn(suint x_, suint y_) external {
+    function spawn(Tile consume landing) external {
         require(
-            x_ < GRID_SIZE && y_ < GRID_SIZE, 
-            "Location out of bounds"
+            landing.owner == address(0),
+            "Cannot spawn on an owned tile"
         );
-
-        // insert owner & tile pair to set
-        tiles.insert(msg.sender: Tile({
+        Tile memory updatedLanding = Tile({
             resources: 10,
-            x: x_,
-            y: y_,
-        }))
+            r: landing.r,
+            c: landing.c,
+        };
+        tiles.insert(updatedLanding)
     }
 
-    /*
-     * - any function that uses find() is a shielded function
-     * - shielded functions are sent to Elliptic
-     * - any function called by a shielded function is also sent to Elliptic
-     */
-    function query(Tile Q, suint xA, suint yA) view 
-        returns(Tile memory) {
-
-        // linear scan rn, can improve 
-        Tile memory tA = tiles.find((t) => t.x == xA  && t.y == yA);
-
+    modifier isNeighbor(
+        uint256 r1,
+        uint256 c1,
+        uint256 r2,
+        uint256 c2
+    ) {
         require(
-            tA.owner == msg.sender, 
-            "Sender doesn't own claimed tile"
+            (r1 == r2 && (c1 == c2 + 1 || c1 == c2 - 1)) ||
+                (c1 == c2 && (r1 == r2 + 1 || r1 == r2 - 1)),
+            "Given points are not neighbors"
         );
-
-        require(
-            isNeighbor(tQ, tA),
-            "Claimed tile is not adjacent to query target"
-        )
-
-        return tQ;
+        _;
     }
 
-    /*
-     * - open ownership model, owner of each instantiation of sstruct is known
-     */
-    modifier isOwnedBySender(Tile t) {
-        require(t.owner == msg.sender, "Tile not owned by sender");
+    modifier isOwnedBySender(Tile memory t) {
+        require(
+            t.owner == msg.sender,
+            "Tile must be owned by sender"
+        );
         _;
     }
 
     /*
-     * - isNeighbor() is called by both shielded & regular funcs, so it's
-     *   deployed to both chain & Elliptic
+     * - any function that uses find() is a shielded function
+     * - shielded functions are sent to Seismic
+     * - any function called by a shielded function is also sent to Seismic
+     * - does NOT consume Q bc view function
+     */
+    function getTile(Tile memory anchor, suint queryR, suint queryC) 
+        view isNeighbor(anchor.r, anchor.c, queryR, queryC) 
+        isOwnedBySender(owned)
+        returns(Tile memory) {
+
+        // linear scan, can improve 
+        return tiles.find((t) => t.r == queryR  && t.c == queryC);
+    }
+
+    modifier sufficientResources(
+        Tile memory t,
+        uint256 amount
+    ) {
+        require(
+            amount >= t.resources,
+            "Insufficient resources"
+        );
+        _;
+    }
+
+    /*
+     * 
      */
     function move(
-        Tile from,
-        Tile to,
+        Tile consume from,
+        Tile consume to,
         suint amount
-    ) external isOwnedBySender(fromX, fromY) {
-        require(
-            amount >= from.resources,
-            "Not enough resources"
-        );
-
-        require(
-            isNeighbor(from, to),
-            "Not an adjacent tile"
-        );
-
+    ) 
+        external 
+        isNeighbor(from.r, from.c, to.r, to.c) 
+        isOwnedBySender(from)
+        sufficientResources(from, amount) 
+    {
+        Tile memory updatedFrom = from;
+        Tile memory updatedTo = to;
         if (to.owner == address(0)) {
-            // Moving onto an unowned tile
-            to.owner = msg.sender;
-            to.resources = amount;
-            from.resources -= amount;
-        }
-        else if (to.owner != msg.sender) {
-            // Moving onto an enemy tile
-            if (amount > grid[toX][toY].resources) {
-                // Conquered successfully
-                grid[toX][toY].owner = msg.sender;
-                grid[toX][toY].resources = amount - grid[toX][toY].resources;
+            // moving onto unowned tile
+            updatedTo.owner = msg.sender;
+            updatedTo.numTroops = amount;
+        } else if (to.owner != msg.sender) {
+            // moving onto enemy tile
+            if (amount > to.numTroops) {
+                // conquer tile
+                updatedTo.owner = msg.sender;
+                updatedTo.numTroops = amount - to.numTroops;
             } else {
-                // Not enough to conquer 
-                grid[toX][toY].resources -= amount;
+                // did not conquer tile
+                updatedTo.numTroops -= amount;
             }
-            grid[fromX][fromY].resources -= amount;
+        } else {
+            // moving onto own tile
+            updatedTo.numTroops += amount;
         }
-        else {
-            // Moving onto your own tile
-            grid[toX][toY].resources += amount;
-            grid[fromX][fromY].resources -= amount;
-        }
+        updatedFrom.numTroops -= amount;
+        
+        tiles.insert(updatedFrom);
+        tiles.insert(updatedTo);
     }
 }
