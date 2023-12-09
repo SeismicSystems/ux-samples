@@ -1,9 +1,17 @@
 /*
+ * [SPDX-License-Identifier: MIT]
+ *
  * [TODO]
+ *
  */
 pragma solidity ^0.8.0;
 
 contract NetworkStates {
+
+    sstruct Location {
+        suint r,
+        suint c
+    }
 
     /*
      * - owner is a reserved attribute of any sstruct
@@ -14,9 +22,16 @@ contract NetworkStates {
      */
     sstruct Tile {
         suint resources;
-        suint r;
-        suint c;
+        Location virt loc;
     }
+
+    Tile EMPTY_TL = Tile({
+        resources: 0,
+        loc: Loc({
+            r: 0,
+            c: 0
+        })
+    })
 
     /*
      * sstructs are stored in unordered set (actually a map beind the scenes), 
@@ -24,14 +39,21 @@ contract NetworkStates {
      */
     Tile{} tiles;
 
+    mapping(address => bool) spawnPaymentTracker;
+    mapping(address => Location) spawnCoord;
+
+    modifier isUnowned(Tile memory t) {
+        require(
+            t.owner == address(0),
+            "Cannot spawn onto an owned tile"
+        );
+        _;
+    }
+
     /*
      * - landing is consumed
      */
-    function spawn(Tile consume landing) external {
-        require(
-            landing.owner == address(0),
-            "Cannot spawn on an owned tile"
-        );
+    function spawn(Tile consume landing) external payable isUnowned(tiles[r][c]) {
         Tile memory updatedLanding = Tile({
             resources: 10,
             r: landing.r,
@@ -62,13 +84,41 @@ contract NetworkStates {
         _;
     }
 
+    modifier sentSpawnEth() {
+        require(
+            msg.value == 0.01 ether,
+            "Must send 0.01 ETH with the spawn request"
+        );
+        _;
+    }
+
+    function requestSpawn() payable sentSpawnEth() {
+        spawnPaymentTracker[msg.sender] = true;
+    }
+
+    modifier eligibleForLanding(suint r, suint c) {
+        require(
+            spawnPaymentTracker[msg.sender],
+            "Must request to spawn prior to receiving a landing Tile"
+        );
+
+        suint spawnR = spawnCoord[msg.sender].r;
+        suint spawnC = spawnCoord[msg.sender].c;
+        require(
+            (spawnR == 0 && spawnC == 0) || 
+            (tiles.find((t) => t.r == spawnR  && t.c == spawnC) !== EMPTY_TL),
+            ""
+        );
+        _;
+    }
+
     /*
      * - any function that uses find() is a shielded function
      * - shielded functions are sent to Seismic
      * - any function called by a shielded function is also sent to Seismic
      * - does NOT consume Q bc view function
      */
-    function getTile(Tile memory anchor, suint queryR, suint queryC) 
+    function getTileMove(Tile memory anchor, suint queryR, suint queryC) 
         view isNeighbor(anchor.r, anchor.c, queryR, queryC) 
         isOwnedBySender(owned)
         returns(Tile memory) {
