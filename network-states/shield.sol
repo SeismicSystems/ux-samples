@@ -1,42 +1,53 @@
 /*
  * [SPDX-License-Identifier: MIT]
  *
- * [TODO]
+ * Game loop introduced in original.sol with fog of war added via Seismic's 
+ * construction. Logic should look fairly similar with some shuffling around of
+ * data types and extra functions for conditional reveals.
  *
  */
 pragma solidity ^0.8.0;
 
 contract NetworkStates {
 
-    sstruct Location {
+    /*
+     * We introduce a new data type <suint>. Every number of type suint will be 
+     * shielded on-chain (only readable to some parties). The bound for these 
+     * numbers are a bit smaller than uint256's because they need to be put into 
+     * ZK circuits. 
+     *
+     * The below structs only include suint values now due to how Network States 
+     * works, but suint variables and uint256 variables are typically free to 
+     * mix and match within a single struct. 
+     *
+     * Any struct with an suint variable has an implicit <owner> attribute, the 
+     * address of the last wallet to edit it. The outermost struct is what 
+     * carries this owner attribute. Below, the Location struct does not have a 
+     * separate owner from Tile. In a sense, the layering is just syntactic
+     * sugar to add two suint attributes <r> and <c> to a Tile. 
+     *
+     * You can no longer index on <r> and <c> since they are of type suint 
+     * (otherwise you'd leak information). For these cases, where the natural
+     * index of a data structure is a shielded variable, you can instead store 
+     * them in an unordered set (we implement using a map behind the scenes). 
+     * The indices (<r> and <c>) can be included as attributes in the object
+     * itself now.
+     *
+     * There's a new reserved word here called <virt>. This is used whenever 
+     * the state of your protocol needs to be initialized. We need that in this
+     * case because unowned tiles exist even before anyone moves onto them. 
+     * The <virt> word next to <loc> below initializes unowned Tiles with 0
+     * resources at every (<r>, <c>).
+     *
+     */
+    struct Location {
         suint r,
         suint c
     }
-
-    /*
-     * - owner is a reserved attribute of any sstruct
-     * - sstructs can have members variables of type suint, shielded ints
-     * - this sstruct only has suint members, but that doesn't always need
-     *   to be the case, can have uint256 too
-     * - any variable that interacts with suint must also be suint
-     */
-    sstruct Tile {
+    struct Tile {
         suint resources;
         Location virt loc;
     }
-
-    Tile EMPTY_TL = Tile({
-        resources: 0,
-        loc: Loc({
-            r: 0,
-            c: 0
-        })
-    })
-
-    /*
-     * sstructs are stored in unordered set (actually a map beind the scenes), 
-     * so location must be an attribute (can't index)
-     */
     Tile{} tiles;
 
     mapping(address => bool) spawnPaymentTracker;
@@ -106,7 +117,7 @@ contract NetworkStates {
         suint spawnC = spawnCoord[msg.sender].c;
         require(
             (spawnR == 0 && spawnC == 0) || 
-            (tiles.find((t) => t.r == spawnR  && t.c == spawnC) !== EMPTY_TL),
+            (tiles.find((t) => t.r == spawnR  && t.c == spawnC).owner === address(0)),
             ""
         );
         _;
