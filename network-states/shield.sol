@@ -16,6 +16,10 @@ contract NetworkStates {
      * numbers are a bit smaller than uint256's because they need to be put into 
      * ZK circuits. 
      *
+     * These <suint> variables are represented as hiding commitments on-chain. 
+     * The pre-images of these variables are stored with shielding providers 
+     * and can be fetched via auxiliary functions.
+     *
      * The below structs only include suint values now due to how Network States 
      * works, but suint variables and uint256 variables are typically free to 
      * mix and match within a single struct. 
@@ -50,29 +54,95 @@ contract NetworkStates {
     }
     Tile{} tiles;
 
+    /*
+     * Tracks whether some address has paid the buy-in to spawn. 
+     */
     mapping(address => bool) spawnPaymentTracker;
+
+    /*
+     * Store latest spawn coordinate queried by address. Only used for 
+     * auxiliary function, so does not have corresponding on-chain 
+     * representation.
+     */
     mapping(address => Location) spawnCoord;
 
-    modifier isUnowned(Tile memory t) {
-        require(
-            t.owner == address(0),
-            "Cannot spawn onto an owned tile"
-        );
-        _;
+    /*
+     * Players now need to request to spawn prior to actually spawning. Prevents
+     * sybil attacks where a malicious party spins up infinite wallets to feign
+     * spawning at every Tile.
+     */
+    function requestSpawn() external payable sentSpawnEth() {
+        spawnPaymentTracker[msg.sender] = true;
     }
 
     /*
-     * - landing is consumed
+     * Spawns player at the <landing> Tile by consuming (invalidating) its old
+     * value and replacing it with a new Tile with 10 resources owned by the
+     * player.
      */
-    function spawn(Tile consume landing) external payable isUnowned(tiles[r][c]) {
+    function spawn(Tile consume landing) external {
         Tile memory updatedLanding = Tile({
             resources: 10,
-            r: landing.r,
-            c: landing.c,
-        };
+            loc: Location({r: landing.r, c: landing.c})
+        });
         tiles.insert(updatedLanding)
     }
 
+    /*
+     * To move is to transfer troops from one tile (the "from" tile) to a 
+     * neighboring tile (the "to" tile) by consuming the old values of both 
+     * tiles and replacing them with the updated values after running the 
+     * conquering logic.
+     */
+    function move(
+        Tile consume from,
+        Tile consume to,
+        suint amount
+    ) 
+        external 
+        isNeighbor(from.r, from.c, to.r, to.c) 
+        isOwnedBySender(from)
+        sufficientResources(from, amount) 
+    {
+        Tile memory updatedFrom = from;
+        Tile memory updatedTo = to;
+        if (to.owner == address(0)) {
+            // Moving onto an unowned tile captures it
+            updatedTo.owner = msg.sender;
+            updatedTo.numTroops = amount;
+        } else if (to.owner != msg.sender) {
+            // Moving onto an enemy tile leads to a battle
+            if (amount > to.numTroops) {
+                // You conquer the enemy tile if you bring more troops than 
+                // they currently have on there
+                updatedTo.owner = msg.sender;
+                updatedTo.numTroops = amount - to.numTroops;
+            } else {
+                // You do not conquer the enemy tile if you have less
+                updatedTo.numTroops -= amount;
+            }
+        } else {
+            // Moving onto an owned tile is additive
+            updatedTo.numTroops += amount;
+        }
+        updatedFrom.numTroops -= amount;
+        
+        tiles.insert(updatedFrom);
+        tiles.insert(updatedTo);
+    }
+
+    /*
+     * Auxiliary function for fetching a candidate spawn Tile from the shielding
+     * provider. 
+     */
+    function getTileSpawn(suint spawnR, suint spawnC) view eligibleForLanding() {
+        return tiles.find((t) => t.r == spawnR && tiles.c == spawnC);
+    }
+
+    /*
+     * Assert that two (row, col) locations are adjacent, i.e. one step away
+     * on the cardinal plane.
+     */
     modifier isNeighbor(
         uint256 r1,
         uint256 c1,
@@ -103,10 +173,6 @@ contract NetworkStates {
         _;
     }
 
-    function requestSpawn() payable sentSpawnEth() {
-        spawnPaymentTracker[msg.sender] = true;
-    }
-
     modifier eligibleForLanding(suint r, suint c) {
         require(
             spawnPaymentTracker[msg.sender],
@@ -118,7 +184,7 @@ contract NetworkStates {
         require(
             (spawnR == 0 && spawnC == 0) || 
             (tiles.find((t) => t.r == spawnR  && t.c == spawnC).owner === address(0)),
-            ""
+            "Previously requested spawn tile still valid"
         );
         _;
     }
@@ -147,44 +213,5 @@ contract NetworkStates {
             "Insufficient resources"
         );
         _;
-    }
-
-    /*
-     * 
-     */
-    function move(
-        Tile consume from,
-        Tile consume to,
-        suint amount
-    ) 
-        external 
-        isNeighbor(from.r, from.c, to.r, to.c) 
-        isOwnedBySender(from)
-        sufficientResources(from, amount) 
-    {
-        Tile memory updatedFrom = from;
-        Tile memory updatedTo = to;
-        if (to.owner == address(0)) {
-            // moving onto unowned tile
-            updatedTo.owner = msg.sender;
-            updatedTo.numTroops = amount;
-        } else if (to.owner != msg.sender) {
-            // moving onto enemy tile
-            if (amount > to.numTroops) {
-                // conquer tile
-                updatedTo.owner = msg.sender;
-                updatedTo.numTroops = amount - to.numTroops;
-            } else {
-                // did not conquer tile
-                updatedTo.numTroops -= amount;
-            }
-        } else {
-            // moving onto own tile
-            updatedTo.numTroops += amount;
-        }
-        updatedFrom.numTroops -= amount;
-        
-        tiles.insert(updatedFrom);
-        tiles.insert(updatedTo);
     }
 }
