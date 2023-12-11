@@ -132,11 +132,52 @@ contract NetworkStates {
     }
 
     /*
-     * Auxiliary function for fetching a candidate spawn Tile from the shielding
-     * provider. 
+     * Auxiliary functions are can call find() on data structures with shielded 
+     * variables. It searches over pre-images stored with the shielding 
+     * provider and returns an array of all objects that satisfy the input
+     * function. 
+     *
+     * This auxiliary function is used for fetching a candidate spawn Tile. As
+     * with all auxiliary functions, must be <view>.
      */
-    function getTileSpawn(suint spawnR, suint spawnC) view eligibleForLanding() {
-        return tiles.find((t) => t.r == spawnR && tiles.c == spawnC);
+    function getTileSpawn(suint spawnR, suint spawnC) 
+        view 
+        eligibleForLanding() 
+    {
+        // Currently a linear scan, but can open up API for advanced users for
+        // custom data structures + search algorithms. 
+        Tile result[] = tiles.find((t) => t.r == spawnR && tiles.c == spawnC);
+        require(
+            result.length === 1,
+            "Requested location doesn't have unique match."
+        )
+        return result[0];
+    }
+
+    /*
+     * Auxiliary function for fetching a Tile that neighbors the player's state.
+     * Access is gated via owning an anchor Tile that is next to the requested
+     * Tile. 
+     *
+     * Auxiliary functions cannot consume anchor Tile since it's a view
+     * function (you wouldn't want to anyway).
+     */
+    function getNeighbor(Tile memory anchor, suint query) 
+        view 
+        isNeighbor(anchor.r, anchor.c, queryR, queryC) 
+        isOwnedBySender(anchor)
+        returns(Tile memory) 
+    {
+        return fetchUniqueLoc(query);
+    }
+
+    function fetchUniqueLoc(Location loc) internal view {
+        Tile result[] = tiles.find((t) => t.r == loc.r  && t.c == loc.c)
+        require(
+            result.length === 1,
+            "Requested location doesn't have unique match."
+        )
+        return result[0];
     }
 
     /*
@@ -149,14 +190,40 @@ contract NetworkStates {
         uint256 r2,
         uint256 c2
     ) {
+        bool isVerticalNeighbor = c1 == c2 && (r1 == r2 + 1 || r1 == r2 - 1);
+        bool isHorizontalNeighbor = r1 == r2 && (c1 == c2 + 1 || c1 == c2 - 1);
         require(
-            (r1 == r2 && (c1 == c2 + 1 || c1 == c2 - 1)) ||
-                (c1 == c2 && (r1 == r2 + 1 || r1 == r2 - 1)),
+            isVerticalNeighbor || isHorizontalNeighbor,
             "Given points are not neighbors"
         );
         _;
     }
 
+    /*
+     * Players are only eligible to request for a spawn tile if they 1) have 
+     * bought in at a previous block and 2) either hasn't requested a 
+     * spawn tile before or was previously given a spawn tile that is still 
+     * unowned. 
+     */
+    modifier eligibleForLanding() {
+        require(
+            spawnPaymentTracker[msg.sender],
+            "Must request to spawn prior to receiving a landing Tile"
+        );
+
+        bool isPreInit = spawnCoord[msg.sender].r == 0 &&
+                           spawnCoord[msg.sender].c == 0;
+        Tile currentSpawn = fetchUniqueLoc(spawnCoord[msg.sender])
+        require(
+            isPreInit || (currentSpawn.owner == address(0)),
+            "Previously requested spawn tile still valid"
+        );
+        _;
+    }
+
+    /*
+     * Assert that a tile <t> is owned by the tx sender.
+     */
     modifier isOwnedBySender(Tile memory t) {
         require(
             t.owner == msg.sender,
@@ -165,6 +232,9 @@ contract NetworkStates {
         _;
     }
 
+    /*
+     * Assert that tx was sent with 0.01 ETH.
+     */
     modifier sentSpawnEth() {
         require(
             msg.value == 0.01 ether,
@@ -173,44 +243,16 @@ contract NetworkStates {
         _;
     }
 
-    modifier eligibleForLanding(suint r, suint c) {
-        require(
-            spawnPaymentTracker[msg.sender],
-            "Must request to spawn prior to receiving a landing Tile"
-        );
-
-        suint spawnR = spawnCoord[msg.sender].r;
-        suint spawnC = spawnCoord[msg.sender].c;
-        require(
-            (spawnR == 0 && spawnC == 0) || 
-            (tiles.find((t) => t.r == spawnR  && t.c == spawnC).owner === address(0)),
-            "Previously requested spawn tile still valid"
-        );
-        _;
-    }
-
     /*
-     * - any function that uses find() is a shielded function
-     * - shielded functions are sent to Seismic
-     * - any function called by a shielded function is also sent to Seismic
-     * - does NOT consume Q bc view function
+     * Assert that a tile <t> contains enough troops to move <amount> off.
      */
-    function getTileMove(Tile memory anchor, suint queryR, suint queryC) 
-        view isNeighbor(anchor.r, anchor.c, queryR, queryC) 
-        isOwnedBySender(owned)
-        returns(Tile memory) {
-
-        // linear scan, can improve 
-        return tiles.find((t) => t.r == queryR  && t.c == queryC);
-    }
-
     modifier sufficientResources(
         Tile memory t,
         uint256 amount
     ) {
         require(
-            amount >= t.resources,
-            "Insufficient resources"
+            amount <= t.resources,
+            "Insufficient number of troops at the tile"
         );
         _;
     }

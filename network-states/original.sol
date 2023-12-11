@@ -110,9 +110,10 @@ contract NetworkStates {
         uint256 r2,
         uint256 c2
     ) {
+        bool isVerticalNeighbor = c1 == c2 && (r1 == r2 + 1 || r1 == r2 - 1);
+        bool isHorizontalNeighbor = r1 == r2 && (c1 == c2 + 1 || c1 == c2 - 1);
         require(
-            (r1 == r2 && (c1 == c2 + 1 || c1 == c2 - 1)) ||
-                (c1 == c2 && (r1 == r2 + 1 || r1 == r2 - 1)),
+            isVerticalNeighbor || isHorizontalNeighbor,
             "Given points are not neighbors"
         );
         _;
