@@ -2,8 +2,8 @@
  * [SPDX-License-Identifier: MIT]
  *
  * A demo for Network States without fog of war. Players can choose to spawn at
- * any unowned tile for 0.01 ETH. They land with 10 troops for conquering 
- * surrounding land.
+ * any unowned tile for 0.01 ETH. They land with 10 troops, which they can use
+ * to conquer surrounding land.
  *
  */
 pragma solidity ^0.8.0;
@@ -22,12 +22,12 @@ contract NetworkStates {
     mapping(uint256 => mapping(uint256 => Tile)) public tiles;
 
     /*
-     * Players can spawn onto any unowned tile with a buy in of ETH. 
+     * Players can spawn onto any unowned tile by staking ETH. 
      */
     function spawn(
         uint256 r,
         uint256 c
-    ) external payable isUnowned(tiles[r][c]) sentSpawnEth {
+    ) external payable isUnowned(tiles[r][c]) sentSpawnEth() {
         Tile storage landing = tiles[r][c];
         landing.numTroops = 10;
         landing.owner = msg.sender;
