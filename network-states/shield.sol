@@ -1,9 +1,9 @@
 /*
  * [SPDX-License-Identifier: MIT]
  *
- * Game loop introduced in original.sol with fog of war added via Seismic's 
- * construction. Logic should look fairly similar with some shuffling around of
- * data types and extra functions for conditional reveals.
+ * Game loop from original.sol with fog of war added via Seismic's construction. 
+ * Logic should look similar, with some shuffling around of data types and extra 
+ * functions for conditional reveals.
  *
  */
 pragma solidity ^0.8.0;
@@ -18,7 +18,7 @@ contract NetworkStates {
      *
      * These <suint> variables are represented as hiding commitments on-chain. 
      * The pre-images of these variables are stored with shielding providers 
-     * and can be fetched via auxiliary functions.
+     * and can be fetched via "auxiliary functions".
      *
      * The below structs only include suint values now due to how Network States 
      * works, but suint variables and uint256 variables are typically free to 
@@ -28,20 +28,19 @@ contract NetworkStates {
      * address of the last wallet to edit it. The outermost struct is what 
      * carries this owner attribute. Below, the Location struct does not have a 
      * separate owner from Tile. In a sense, the layering is just syntactic
-     * sugar to add two suint attributes <r> and <c> to a Tile. 
+     * sugar to add two suint attributes <r> and <c> to Tile. 
      *
      * You can no longer index on <r> and <c> since they are of type suint 
-     * (otherwise you'd leak information). For these cases, where the natural
-     * index of a data structure is a shielded variable, you can instead store 
-     * them in an unordered set (we implement using a map behind the scenes). 
-     * The indices (<r> and <c>) can be included as attributes in the object
-     * itself now.
+     * (otherwise you'd leak information). For these cases- when the natural
+     * index of a data structure is a shielded variable- you can use an 
+     * unordered set. The indices (<r> and <c>) can be included as attributes 
+     * in the object itself now.
      *
-     * There's a new reserved word here called <virt>. This is used whenever 
+     * There's a new reserved word here <virt>. This is used whenever 
      * the state of your protocol needs to be initialized. We need that in this
      * case because unowned tiles exist even before anyone moves onto them. 
      * The <virt> word next to <loc> below initializes unowned Tiles with 0
-     * resources at every (<r>, <c>).
+     * troops at every (<r>, <c>).
      *
      */
     struct Location {
@@ -49,7 +48,7 @@ contract NetworkStates {
         suint c
     }
     struct Tile {
-        suint resources;
+        suint numTroops;
         Location virt loc;
     }
     Tile{} tiles;
@@ -60,16 +59,18 @@ contract NetworkStates {
     mapping(address => bool) spawnPaymentTracker;
 
     /*
-     * Store latest spawn coordinate queried by address. Only used for 
-     * auxiliary function, so does not have corresponding on-chain 
+     * Store latest spawn coordinate fetched by an address. Only used for 
+     * auxiliary functions, so does not have corresponding on-chain 
      * representation.
      */
     mapping(address => Location) spawnCoord;
 
     /*
-     * Players now need to request to spawn prior to actually spawning. Prevents
-     * sybil attacks where a malicious party spins up infinite wallets to feign
-     * spawning at every Tile.
+     * Players now need to request to spawn prior to fetching a spawn Tile. 
+     * Prevents sybil attacks where a malicious party spins up infinite wallets 
+     * to feign spawning at every Tile.
+     *
+     * We don't implement dying + respawning in this demo.
      */
     function requestSpawn() external payable sentSpawnEth() {
         spawnPaymentTracker[msg.sender] = true;
@@ -77,12 +78,12 @@ contract NetworkStates {
 
     /*
      * Spawns player at the <landing> Tile by consuming (invalidating) its old
-     * value and replacing it with a new Tile with 10 resources owned by the
+     * value and replacing it with a new Tile that has 10 troops owned by the
      * player.
      */
     function spawn(Tile consume landing) external {
         Tile memory updatedLanding = Tile({
-            resources: 10,
+            numTroops: 10,
             loc: Location({r: landing.r, c: landing.c})
         });
         tiles.insert(updatedLanding)
@@ -92,7 +93,7 @@ contract NetworkStates {
      * To move is to transfer troops from one tile (the "from" tile) to a 
      * neighboring tile (the "to" tile) by consuming the old values of both 
      * tiles and replacing them with the updated values after running the 
-     * conquering logic.
+     * battle logic.
      */
     function move(
         Tile consume from,
@@ -102,7 +103,7 @@ contract NetworkStates {
         external 
         isNeighbor(from.r, from.c, to.r, to.c) 
         isOwnedBySender(from)
-        sufficientResources(from, amount) 
+        sufficientTroops(from, amount) 
     {
         Tile memory updatedFrom = from;
         Tile memory updatedTo = to;
@@ -132,26 +133,38 @@ contract NetworkStates {
     }
 
     /*
-     * Auxiliary functions are can call find() on data structures with shielded 
+     * Auxiliary functions can call find() on data structures with shielded 
      * variables. It searches over pre-images stored with the shielding 
-     * provider and returns an array of all objects that satisfy the input
+     * provider and returns an array of all objects that satisfy the lambda
      * function. 
-     *
-     * This auxiliary function is used for fetching a candidate spawn Tile. As
-     * with all auxiliary functions, must be <view>.
+     
+     * This fetches tile at <loc> from shielding provider. Should only have one 
+     * tile at each <loc>.
      */
-    function getTileSpawn(suint spawnR, suint spawnC) 
-        view 
-        eligibleForLanding() 
-    {
-        // Currently a linear scan, but can open up API for advanced users for
-        // custom data structures + search algorithms. 
-        Tile result[] = tiles.find((t) => t.r == spawnR && tiles.c == spawnC);
+    function fetchUniqueLoc(Location loc) internal view returns(Tile memory) {
+        Tile result[] = tiles.find((t) => t.r == loc.r  && t.c == loc.c);
         require(
-            result.length === 1,
+            result.length == 1,
             "Requested location doesn't have unique match."
         )
         return result[0];
+    }
+
+    /*
+     * Auxiliary function used for fetching a candidate spawn Tile. As
+     * with all auxiliary functions, must be <view>.
+     *
+     * Again, remember that spawnCoord is a data structure only stored on the
+     * shielding provider and has no on-chain representation. Auxiliary 
+     * functions cannot modify a protocol's on-chain state.
+     */
+    function getTileSpawn(Location targetLoc) 
+        view 
+        eligibleForLanding() 
+    {
+        Tile memory landing = fetchUniqueLoc(targetLoc);
+        spawnCoord[msg.sender] = targetLoc;
+        return landing;
     }
 
     /*
@@ -160,24 +173,16 @@ contract NetworkStates {
      * Tile. 
      *
      * Auxiliary functions cannot consume anchor Tile since it's a view
-     * function (you wouldn't want to anyway).
+     * function (you wouldn't want to invalidate values just by looking at them
+     * anyway).
      */
-    function getNeighbor(Tile memory anchor, suint query) 
+    function getNeighbor(Tile memory anchor, Location query) 
         view 
-        isNeighbor(anchor.r, anchor.c, queryR, queryC) 
+        isNeighbor(anchor.loc.r, anchor.loc.c, query.r, query.c) 
         isOwnedBySender(anchor)
         returns(Tile memory) 
     {
         return fetchUniqueLoc(query);
-    }
-
-    function fetchUniqueLoc(Location loc) internal view {
-        Tile result[] = tiles.find((t) => t.r == loc.r  && t.c == loc.c)
-        require(
-            result.length === 1,
-            "Requested location doesn't have unique match."
-        )
-        return result[0];
     }
 
     /*
@@ -185,15 +190,15 @@ contract NetworkStates {
      * on the cardinal plane.
      */
     modifier isNeighbor(
-        uint256 r1,
-        uint256 c1,
-        uint256 r2,
-        uint256 c2
+        suint r1,
+        suint c1,
+        suint r2,
+        suint c2
     ) {
-        bool isVerticalNeighbor = c1 == c2 && (r1 == r2 + 1 || r1 == r2 - 1);
-        bool isHorizontalNeighbor = r1 == r2 && (c1 == c2 + 1 || c1 == c2 - 1);
+        bool isVertNeighbor = (c1 == c2 && (r1 == r2 + 1 || r1 == r2 - 1));
+        bool isHorizNeighbor = (r1 == r2 && (c1 == c2 + 1 || c1 == c2 - 1));
         require(
-            isVerticalNeighbor || isHorizontalNeighbor,
+            isVertNeighbor || isHorizNeighbor,
             "Given points are not neighbors"
         );
         _;
@@ -201,21 +206,21 @@ contract NetworkStates {
 
     /*
      * Players are only eligible to request for a spawn tile if they 1) have 
-     * bought in at a previous block and 2) either hasn't requested a 
+     * staked ETH at a previous block and 2) either hasn't requested a 
      * spawn tile before or was previously given a spawn tile that is still 
      * unowned. 
      */
     modifier eligibleForLanding() {
         require(
             spawnPaymentTracker[msg.sender],
-            "Must request to spawn prior to receiving a landing Tile"
+            "Must stake using requestSpawn() prior to fetching landing Tile"
         );
 
-        bool isPreInit = spawnCoord[msg.sender].r == 0 &&
-                           spawnCoord[msg.sender].c == 0;
-        Tile currentSpawn = fetchUniqueLoc(spawnCoord[msg.sender])
+        bool uninitialized = (spawnCoord[msg.sender].r == 0 &&
+                                spawnCoord[msg.sender].c == 0);
+        Tile currentSpawn = fetchUniqueLoc(spawnCoord[msg.sender]);
         require(
-            isPreInit || (currentSpawn.owner == address(0)),
+            uninitialized || (currentSpawn.owner != address(0)),
             "Previously requested spawn tile still valid"
         );
         _;
@@ -246,12 +251,12 @@ contract NetworkStates {
     /*
      * Assert that a tile <t> contains enough troops to move <amount> off.
      */
-    modifier sufficientResources(
+    modifier sufficientTroops(
         Tile memory t,
-        uint256 amount
+        suint amount
     ) {
         require(
-            amount <= t.resources,
+            amount <= t.numTroops,
             "Insufficient number of troops at the tile"
         );
         _;
